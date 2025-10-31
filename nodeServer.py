@@ -13,8 +13,8 @@ class NodeServer(Thread):
         self.daemon = True
 
         self.queue = PriorityQueue() # Added
-        self.grants_sent = {}
-        self.grants_received = {}
+        self.grants_sent = set()
+        self.grants_received = set()
         self.yielded = False
         self.failed = False
     
@@ -38,13 +38,14 @@ class NodeServer(Thread):
                         self.connection_list.append(conn)
                     else:
                         try:
-                            msg_stream = read_socket.recvfrom(4096)
-                            for msg in msg_stream:
-                                try:
-                                    ms = json.loads(str(msg,"utf-8"))
-                                    self.process_message(ms)
-                                except:
-                                    None
+                            msg_stream, _ = read_socket.recvfrom(4096)
+                            #for msg in msg_stream:
+                            try:
+                                ms = json.loads(str(msg_stream,"utf-8"))
+                                m = Message.from_json(ms)
+                                self.process_message(m)
+                            except Exception as e: # Added
+                                print(e) # Added
                         except:
                             read_socket.close()
                             self.connection_list.remove(read_socket)
@@ -96,18 +97,18 @@ class NodeServer(Thread):
                 self.grants_sent.add(msg.src)
                     
         elif msg.msg_type == Message_type.YIELD:
-            q_top = self.queue.get()
-            self.queue.put(q_top)
+            q_src, q_msg = self.queue.get()
+            self.queue.put((q_src, q_msg))
             self.node.client.send_message(
                 Message(
                     Message_type.GRANT,
                     self.node.id,
-                    q_top[0],
+                    q_src,
                     self.node.lamport_ts
                 ),
-                q_top[0]
+                q_src
             )
-            self.grants_sent.add(q_top[0])
+            self.grants_sent.add(q_src)
             self.queue.put((msg.src, msg))
             self.grants_sent.remove(msg.src)
 
@@ -115,10 +116,10 @@ class NodeServer(Thread):
             msgs = []
 
             # Delete the message source from the request queue
-            q_top = self.queue.get()
-            while q_top.src != msg.src:
-                msgs.append(q_top)
-                q_top = self.queue.get()
+            q_src, q_msg = self.queue.get()
+            while q_src != msg.src:
+                msgs.append((q_src, q_msg))
+                q_src, q_msg = self.queue.get()
             self.grants_sent.remove(msg.src)
             
             # Put all other extracted messages back into the queue
@@ -126,17 +127,17 @@ class NodeServer(Thread):
                 self.queue.put(m)
 
             # Sent a grant message to the request with the highest priority
-            q_top = self.queue.get()
+            q_src, q_msg = self.queue.get()
             self.node.client.send_message(
                 Message(
                     Message_type.GRANT,
                     self.node.id,
-                    q_top[0],
+                    q_src,
                     self.node.lamport_ts
                 ),
-                q_top[0]
+                q_src
             )
-            self.grants_sent.add(q_top[0])
+            self.grants_sent.add(q_src)
 
         elif msg.msg_type == Message_type.INQUIRE:
             if self.failed or self.yielded:
@@ -146,7 +147,8 @@ class NodeServer(Thread):
                         self.node.id,
                         msg.src,
                         self.node.lamport_ts
-                    )
+                    ),
+                    msg.src
                 )
                 self.yielded = True
 
@@ -159,6 +161,6 @@ class NodeServer(Thread):
             self.failed = True
 
         else:
-            raise ValueError("Non-recognized message type")
+            raise ValueError(f"[ValueError]: Unknown message type: {msg.msg_type}")
 
  

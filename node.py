@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import time
 from nodeServer import NodeServer
 from nodeSend import NodeSend
-from message import Message
+from message import Message, Message_type
 import config
 import random 
 
@@ -28,6 +28,8 @@ class Node(Thread):
         else:
             self.collegues = list(range(1,config.numNodes,2))
 
+        self.collegues.remove(id) # Added
+
 
         self.client = NodeSend(self)    
 
@@ -48,19 +50,38 @@ class Node(Thread):
         self.wakeupcounter = 0
         while self.wakeupcounter <= 2: # Termination criteria
 
-            # Nodes with different starting times
-            time_offset = random.randint(2, 8)
-            time.sleep(time_offset) 
-            
-            # A dummy message
-            print("This is Node_%i at TS:%i sending a message to my collegues"%(self.id,self.lamport_ts))
-            self.lamport_ts += 1 # Increment the timestamp
-            message = Message(msg_type="greetings",
-                            src=self.id,
-                            data="Hola, this is Node_%i _ counter:%i"%(self.id,self.wakeupcounter))
+            self.server.grants_received.clear()
 
-            self.client.multicast(message, self.collegues)
+            # Increase timestamp
+            self.lamport_ts += 1
 
+            # Send requests to all quorum peers
+            self.client.multicast(
+                Message(
+                    msg_type=Message_type.REQUEST,
+                    src=self.id,
+                    ts=self.lamport_ts
+                ),
+                self.collegues
+            )
+
+            # Wait for unanimous grant
+            while len(self.server.grants_received) < len(self.collegues):
+                time.sleep(0.01)
+
+            # ENTER CRITICAL SECTION
+            print(f"[Node_{self.id}]: Greetings from the critical section!")
+            # EXIT CRITICAL SECTION
+
+            # Send release messages to all quorum peers
+            self.client.multicast(
+                Message(
+                    msg_type=Message_type.RELEASE,
+                    src=self.id,
+                    ts=self.lamport_ts
+                ),
+                self.collegues
+            )
 
             # Control iteration 
             self.wakeupcounter += 1 

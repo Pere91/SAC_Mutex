@@ -5,9 +5,9 @@ from enum import Enum # Added
 #TODO MANDATORY implement the Maekawa algorithm messages: REQUEST; RELEASE, REPLY, ... 
 class Message_type(Enum):
     FAILED = 0
-    INQUIRE = 1
-    REQUEST = 2
-    YIELD = 3
+    YIELD = 1
+    INQUIRE = 2
+    REQUEST = 3
     GRANT = 4
     RELEASE = 5
 
@@ -31,6 +31,9 @@ class Message(object):
             dest=self.dest, 
             ts=self.ts, 
             data=self.data)
+    
+    def __str__(self):
+        return f"Message({self.msg_type}, {self.src}, {self.dest}, {self.ts}, {self.data})"
 
     def set_type(self, msg_type):
         self.msg_type = msg_type
@@ -49,10 +52,19 @@ class Message(object):
 
     def to_json(self):
         obj_dict = dict()
-        obj_dict['msg_type'] = self.msg_type
+        obj_dict['msg_type'] = self.msg_type.value
         obj_dict['src'] = self.src
         obj_dict['dest'] = self.dest
         obj_dict['ts'] = self.ts
         obj_dict['data'] = self.data
         return json.dumps(obj_dict)
 
+    @staticmethod
+    def from_json(msg):
+        return Message(
+            msg_type=Message_type(msg['msg_type']),
+            src=msg['src'],
+            dest=msg['dest'],
+            ts=msg['ts'],
+            data=msg['data']
+        )
