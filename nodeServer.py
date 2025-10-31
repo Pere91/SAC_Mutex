@@ -1,14 +1,22 @@
 import select
 from threading import Thread
 import utils
-from message import Message
+from message import Message, Message_type
 import json
+
+from queue import PriorityQueue # Added
 
 class NodeServer(Thread):
     def __init__(self, node):
         Thread.__init__(self)
         self.node = node
         self.daemon = True
+
+        self.queue = PriorityQueue() # Added
+        self.grants_sent = {}
+        self.grants_received = {}
+        self.yielded = False
+        self.failed = False
     
     def run(self):
         self.update()
@@ -47,5 +55,110 @@ class NodeServer(Thread):
     def process_message(self, msg):
         #TODO MANDATORY manage the messages according to the Maekawa algorithm (TIP: HERE OR IN ANOTHER FILE...)
         print("Node_%i receive msg: %s"%(self.node.id,msg))
+
+        if msg.msg_type == Message_type.REQUEST:
+            if self.grants_sent:
+                hp_grant = sorted(self.grants_sent)[0]
+
+                if hp_grant < msg.src:
+                    self.node.client.send_message(
+                        Message(
+                            Message_type.FAILED,
+                            self.node.id,
+                            msg.src,
+                            self.node.lamport_ts
+                        ),
+                        msg.src
+                    )
+                    self.queue.put((msg.src, msg))
+
+                else:
+                    self.node.client.send_message(
+                        Message(
+                            Message_type.INQUIRE,
+                            self.node.id,
+                            hp_grant,
+                            self.node.lamport_ts
+                        ),
+                        hp_grant
+                    )
+
+            else:
+                self.node.client.send_message(
+                    Message(
+                        Message_type.GRANT,
+                        self.node.id,
+                        msg.src,
+                        self.node.lamport_ts
+                    ),
+                    msg.src
+                )
+                self.grants_sent.add(msg.src)
+                    
+        elif msg.msg_type == Message_type.YIELD:
+            q_top = self.queue.get()
+            self.queue.put(q_top)
+            self.node.client.send_message(
+                Message(
+                    Message_type.GRANT,
+                    self.node.id,
+                    q_top[0],
+                    self.node.lamport_ts
+                ),
+                q_top[0]
+            )
+            self.grants_sent.add(q_top[0])
+            self.queue.put((msg.src, msg))
+            self.grants_sent.remove(msg.src)
+
+        elif msg.msg_type == Message_type.RELEASE:
+            msgs = []
+
+            # Delete the message source from the request queue
+            q_top = self.queue.get()
+            while q_top.src != msg.src:
+                msgs.append(q_top)
+                q_top = self.queue.get()
+            self.grants_sent.remove(msg.src)
+            
+            # Put all other extracted messages back into the queue
+            for m in msgs:
+                self.queue.put(m)
+
+            # Sent a grant message to the request with the highest priority
+            q_top = self.queue.get()
+            self.node.client.send_message(
+                Message(
+                    Message_type.GRANT,
+                    self.node.id,
+                    q_top[0],
+                    self.node.lamport_ts
+                ),
+                q_top[0]
+            )
+            self.grants_sent.add(q_top[0])
+
+        elif msg.msg_type == Message_type.INQUIRE:
+            if self.failed or self.yielded:
+                self.node.client.send_message(
+                    Message(
+                        Message_type.YIELD,
+                        self.node.id,
+                        msg.src,
+                        self.node.lamport_ts
+                    )
+                )
+                self.yielded = True
+
+        elif msg.msg_type == Message_type.GRANT:
+            self.grants_received.add(msg.src)
+            self.yielded = False
+            self.failed = False
+
+        elif msg.msg_type == Message_type.FAILED:
+            self.failed = True
+
+        else:
+            raise ValueError("Non-recognized message type")
 
  

@@ -1,6 +1,15 @@
 import json
 
+from enum import Enum # Added
+
 #TODO MANDATORY implement the Maekawa algorithm messages: REQUEST; RELEASE, REPLY, ... 
+class Message_type(Enum):
+    FAILED = 0
+    INQUIRE = 1
+    REQUEST = 2
+    YIELD = 3
+    GRANT = 4
+    RELEASE = 5
 
 class Message(object):
     def __init__(self,
