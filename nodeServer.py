@@ -4,7 +4,7 @@ import utils
 from message import Message, Message_type
 import json
 
-from queue import PriorityQueue # Added
+from queue import PriorityQueue # Added 
 
 class NodeServer(Thread):
     def __init__(self, node):
