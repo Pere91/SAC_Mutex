@@ -1,5 +1,6 @@
 from threading import Event, Thread, Timer, Condition
 from datetime import datetime, timedelta
+from math import ceil, sqrt
 import time
 from nodeServer import NodeServer
 from nodeSend import NodeSend
@@ -30,10 +31,46 @@ class Node(Thread):
 
         # self.collegues.remove(id) # Added
 
-        self.collegues = [ (self.id + 1) % config.numNodes for i in range(1, (config.numNodes // 2) + 1) ]
+        self.__form_colleagues()
+        self.client = NodeSend(self) 
 
+    def __form_colleagues(self):
+        num_rows = ceil(sqrt(config.numNodes))
+        print(self.id)
 
-        self.client = NodeSend(self)    
+        colleague_matrix = []
+        cont = True
+
+        for i in range(num_rows):
+            if not cont:
+                break
+
+            row = []
+            for j in range(num_rows):
+                pos = i * num_rows + j
+
+                if  pos >= config.numNodes:
+                    cont = False
+                    break
+
+                row.append(i * num_rows + j)
+
+            colleague_matrix.append(row)
+
+        row_colleagues = [i for row in colleague_matrix for i in row if self.id in row]
+        col_colleagues = [i for row in colleague_matrix for i in row if (i % num_rows) == (self.id % num_rows) and i != self.id]
+
+        self.collegues = []
+
+        for i in row_colleagues:
+            self.collegues.append(i)
+        for i in col_colleagues:
+            self.collegues.append(i)
+
+        print(self.collegues)
+
+        
+
 
     def do_connections(self):
         self.client.build_connection()

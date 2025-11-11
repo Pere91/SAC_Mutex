@@ -54,7 +54,6 @@ class NodeServer(Thread):
         self.server_socket.close()
 
     def process_message(self, msg):
-        #TODO MANDATORY manage the messages according to the Maekawa algorithm (TIP: HERE OR IN ANOTHER FILE...)
         print("Node_%i receive msg: %s"%(self.node.id,msg))
 
         if msg.msg_type == Message_type.REQUEST:
