@@ -23,12 +23,14 @@ class Node(Thread):
 
         #TODO OPTIONAL This is a simple way to define the collegues, but it is not the best way to do it.
         # You can implement a more complex way to define the collegues, but for now this is enough.
-        if id % 2 == 0:
-            self.collegues = list(range(0,config.numNodes,2))
-        else:
-            self.collegues = list(range(1,config.numNodes,2))
+        # if id % 2 == 0:
+        #     self.collegues = list(range(0,config.numNodes,2))
+        # else:
+        #     self.collegues = list(range(1,config.numNodes,2))
 
-        self.collegues.remove(id) # Added
+        # self.collegues.remove(id) # Added
+
+        self.collegues = [ (self.id + 1) % config.numNodes for i in range(1, (config.numNodes // 2) + 1) ]
 
 
         self.client = NodeSend(self)    

@@ -68,3 +68,25 @@ class Message(object):
             ts=msg['ts'],
             data=msg['data']
         )
+    
+    @staticmethod
+    def parse(str):
+        msgs = []
+
+        while True:
+            split = str.find("}{")
+
+            if split == -1:
+                if str[-1] != '}':
+                    raise ValueError("JSON must end in }")
+                msgs.append(str)
+                break
+            
+            if str[:split + 1][-1] != '}':
+                raise ValueError("JSON must end in }")
+
+            msgs.append(str[:split + 1])
+            str = str[split + 1:]
+
+        return msgs
+

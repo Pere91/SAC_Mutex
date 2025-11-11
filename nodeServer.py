@@ -4,7 +4,7 @@ import utils
 from message import Message, Message_type
 import json
 
-from queue import PriorityQueue # Added 
+from queue import PriorityQueue, Empty # Added 
 
 class NodeServer(Thread):
     def __init__(self, node):
@@ -39,13 +39,13 @@ class NodeServer(Thread):
                     else:
                         try:
                             msg_stream, _ = read_socket.recvfrom(4096)
-                            #for msg in msg_stream:
                             try:
-                                ms = json.loads(str(msg_stream,"utf-8"))
-                                m = Message.from_json(ms)
-                                self.process_message(m)
+                                msgs = Message.parse(str(msg_stream, "utf-8"))
+                                for m in msgs:
+                                    self.process_message(Message.from_json(json.loads(m)))
                             except Exception as e: # Added
-                                print(e) # Added
+                                print("Exception: ", end="") # Added
+                                print(e)
                         except:
                             read_socket.close()
                             self.connection_list.remove(read_socket)
@@ -121,6 +121,15 @@ class NodeServer(Thread):
                 msgs.append((q_src, q_msg))
                 q_src, q_msg = self.queue.get()
             self.grants_sent.remove(msg.src)
+
+            # try:
+            #     while True:
+            #         q_src, q_msg = self.queue.get_nowait()
+            #         if q_src == msg.src:
+            #             break
+            #         msgs.append((q_src, q_msg))
+            # except Empty:
+            #     pass
             
             # Put all other extracted messages back into the queue
             for m in msgs:
