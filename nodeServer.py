@@ -70,7 +70,7 @@ class NodeServer(Thread):
                         ),
                         msg.src
                     )
-                    self.queue.put((msg.src, msg))
+                    self.queue.put((msg.ts, msg.src, msg))
 
                 else:
                     self.node.client.send_message(
@@ -96,8 +96,8 @@ class NodeServer(Thread):
                 self.grants_sent.add(msg.src)
                     
         elif msg.msg_type == Message_type.YIELD:
-            q_src, q_msg = self.queue.get()
-            self.queue.put((q_src, q_msg))
+            q_ts, q_src, q_msg = self.queue.get()
+            self.queue.put((q_ts, q_src, q_msg))
             self.node.client.send_message(
                 Message(
                     Message_type.GRANT,
@@ -108,44 +108,49 @@ class NodeServer(Thread):
                 q_src
             )
             self.grants_sent.add(q_src)
-            self.queue.put((msg.src, msg))
-            self.grants_sent.remove(msg.src)
+            self.queue.put((msg.ts, msg.src, msg))
+            if msg.src in self.grants_sent:
+                self.grants_sent.remove(msg.src)
 
         elif msg.msg_type == Message_type.RELEASE:
             msgs = []
 
             # Delete the message source from the request queue
-            q_src, q_msg = self.queue.get()
-            while q_src != msg.src:
-                msgs.append((q_src, q_msg))
-                q_src, q_msg = self.queue.get()
-            self.grants_sent.remove(msg.src)
+            # q_src, q_msg = self.queue.get()
+            # while q_src != msg.src and not self.queue.empty():
+            #     msgs.append((q_src, q_msg))
+            #     q_src, q_msg = self.queue.get()
+            # if msg.src in self.grants_sent:
+            #     self.grants_sent.remove(msg.src)
+           
+            # # Put all other extracted messages back into the queue
+            # for m in msgs:
+            #     self.queue.put(m)
 
-            # try:
-            #     while True:
-            #         q_src, q_msg = self.queue.get_nowait()
-            #         if q_src == msg.src:
-            #             break
-            #         msgs.append((q_src, q_msg))
-            # except Empty:
-            #     pass
+            new_queue = PriorityQueue()
+            found = False
+            while  not self.queue.empty():
+                q_ts, q_src, q_msg = self.queue.get()
+                if q_src == msg.src:
+                    found = True
+                    continue
+                new_queue.put((q_ts, q_src, q_msg))
             
-            # Put all other extracted messages back into the queue
-            for m in msgs:
-                self.queue.put(m)
+            self.queue = new_queue
 
             # Sent a grant message to the request with the highest priority
-            q_src, q_msg = self.queue.get()
-            self.node.client.send_message(
-                Message(
-                    Message_type.GRANT,
-                    self.node.id,
-                    q_src,
-                    self.node.lamport_ts
-                ),
-                q_src
-            )
-            self.grants_sent.add(q_src)
+            if not self.queue.empty():
+                q_ts, q_src, q_msg = self.queue.get()
+                self.node.client.send_message(
+                    Message(
+                        Message_type.GRANT,
+                        self.node.id,
+                        q_src,
+                        self.node.lamport_ts
+                    ),
+                    q_src
+                )
+                self.grants_sent.add(q_src)
 
         elif msg.msg_type == Message_type.INQUIRE:
             if self.failed or self.yielded:

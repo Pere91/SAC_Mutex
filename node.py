@@ -22,21 +22,11 @@ class Node(Thread):
         self.server = NodeServer(self) 
         self.server.start()
 
-        #TODO OPTIONAL This is a simple way to define the collegues, but it is not the best way to do it.
-        # You can implement a more complex way to define the collegues, but for now this is enough.
-        # if id % 2 == 0:
-        #     self.collegues = list(range(0,config.numNodes,2))
-        # else:
-        #     self.collegues = list(range(1,config.numNodes,2))
-
-        # self.collegues.remove(id) # Added
-
         self.__form_colleagues()
         self.client = NodeSend(self) 
 
     def __form_colleagues(self):
         num_rows = ceil(sqrt(config.numNodes))
-        print(self.id)
 
         colleague_matrix = []
         cont = True
@@ -63,11 +53,10 @@ class Node(Thread):
         self.collegues = []
 
         for i in row_colleagues:
-            self.collegues.append(i)
+            if i != self.id:
+                self.collegues.append(i)
         for i in col_colleagues:
             self.collegues.append(i)
-
-        print(self.collegues)
 
         
 
@@ -92,7 +81,7 @@ class Node(Thread):
             self.server.grants_received.clear()
 
             # Increase timestamp
-            self.lamport_ts += 1
+            # self.lamport_ts += 1
 
             # Send requests to all quorum peers
             self.client.multicast(
