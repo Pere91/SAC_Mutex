@@ -4,7 +4,7 @@ import utils
 from message import Message, Message_type
 import json
 
-from queue import PriorityQueue, Empty # Added 
+from queue import PriorityQueue
 
 class NodeServer(Thread):
     def __init__(self, node):
@@ -13,7 +13,7 @@ class NodeServer(Thread):
         self.daemon = True
 
         self.queue = PriorityQueue() # Added
-        self.grants_sent = set()
+        self.grants_sent = None
         self.grants_received = set()
         self.yielded = False
         self.failed = False
@@ -57,10 +57,11 @@ class NodeServer(Thread):
         print("Node_%i receive msg: %s"%(self.node.id,msg))
 
         if msg.msg_type == Message_type.REQUEST:
-            if self.grants_sent:
-                hp_grant = sorted(self.grants_sent)[0]
 
-                if hp_grant < msg.src:
+            if self.grants_sent:
+                hp_ts, hp_src = self.grants_sent
+
+                if (hp_ts, hp_src) < (msg.ts, msg.src):
                     self.node.client.send_message(
                         Message(
                             Message_type.FAILED,
@@ -77,10 +78,10 @@ class NodeServer(Thread):
                         Message(
                             Message_type.INQUIRE,
                             self.node.id,
-                            hp_grant,
+                            hp_src,
                             self.node.lamport_ts
                         ),
-                        hp_grant
+                        hp_src
                     )
 
             else:
@@ -93,7 +94,7 @@ class NodeServer(Thread):
                     ),
                     msg.src
                 )
-                self.grants_sent.add(msg.src)
+                self.grants_sent = (msg.ts, msg.src)
                     
         elif msg.msg_type == Message_type.YIELD:
             q_ts, q_src, q_msg = self.queue.get()
@@ -107,32 +108,16 @@ class NodeServer(Thread):
                 ),
                 q_src
             )
-            self.grants_sent.add(q_src)
+            self.grants_sent = (q_ts, q_src)
             self.queue.put((msg.ts, msg.src, msg))
             if msg.src in self.grants_sent:
                 self.grants_sent.remove(msg.src)
 
         elif msg.msg_type == Message_type.RELEASE:
-            msgs = []
-
-            # Delete the message source from the request queue
-            # q_src, q_msg = self.queue.get()
-            # while q_src != msg.src and not self.queue.empty():
-            #     msgs.append((q_src, q_msg))
-            #     q_src, q_msg = self.queue.get()
-            # if msg.src in self.grants_sent:
-            #     self.grants_sent.remove(msg.src)
-           
-            # # Put all other extracted messages back into the queue
-            # for m in msgs:
-            #     self.queue.put(m)
-
             new_queue = PriorityQueue()
-            found = False
             while  not self.queue.empty():
                 q_ts, q_src, q_msg = self.queue.get()
                 if q_src == msg.src:
-                    found = True
                     continue
                 new_queue.put((q_ts, q_src, q_msg))
             
@@ -150,7 +135,7 @@ class NodeServer(Thread):
                     ),
                     q_src
                 )
-                self.grants_sent.add(q_src)
+                self.grants_sent = (q_ts, q_src)
 
         elif msg.msg_type == Message_type.INQUIRE:
             if self.failed or self.yielded:
@@ -164,6 +149,7 @@ class NodeServer(Thread):
                     msg.src
                 )
                 self.yielded = True
+                self.grants_received.clear()
 
         elif msg.msg_type == Message_type.GRANT:
             self.grants_received.add(msg.src)
@@ -172,6 +158,7 @@ class NodeServer(Thread):
 
         elif msg.msg_type == Message_type.FAILED:
             self.failed = True
+            self.grants_received.clear()
 
         else:
             raise ValueError(f"[ValueError]: Unknown message type: {msg.msg_type}")
