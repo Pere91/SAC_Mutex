@@ -3,8 +3,7 @@ from threading import Thread
 import utils
 from message import Message, Message_type
 import json
-
-from queue import PriorityQueue, Empty # Added 
+from queue import PriorityQueue
 
 class NodeServer(Thread):
     def __init__(self, node):
@@ -12,12 +11,12 @@ class NodeServer(Thread):
         self.node = node
         self.daemon = True
 
-        self.queue = PriorityQueue() # Added
-        self.grants_sent = set()
+        self.queue = PriorityQueue()
+        self.grants_sent = None  # Track current grant as (ts, src)
         self.grants_received = set()
         self.yielded = False
         self.failed = False
-    
+
     def run(self):
         self.update()
 
@@ -27,140 +26,84 @@ class NodeServer(Thread):
         self.connection_list.append(self.server_socket)
 
         while self.node.daemon:
-            (read_sockets, write_sockets, error_sockets) = select.select(
-                self.connection_list, [], [], 5)
-            if not (read_sockets or write_sockets or error_sockets):
-                print('NS%i - Timed out'%self.node.id) #force to assert the while condition 
-            else:
-                for read_socket in read_sockets:
-                    if read_socket == self.server_socket:
-                        (conn, addr) = read_socket.accept()
-                        self.connection_list.append(conn)
-                    else:
-                        try:
-                            msg_stream, _ = read_socket.recvfrom(4096)
-                            try:
-                                msgs = Message.parse(str(msg_stream, "utf-8"))
-                                for m in msgs:
-                                    self.process_message(Message.from_json(json.loads(m)))
-                            except Exception as e: # Added
-                                print("Exception: ", end="") # Added
-                                print(e)
-                        except:
-                            read_socket.close()
-                            self.connection_list.remove(read_socket)
-                            continue
-        
+            read_sockets, _, error_sockets = select.select(self.connection_list, [], self.connection_list, 5)
+            if not read_sockets:
+                print(f'NS{self.node.id} - Timed out')
+                continue
+
+            for read_socket in read_sockets:
+                if read_socket == self.server_socket:
+                    conn, _ = read_socket.accept()
+                    self.connection_list.append(conn)
+                else:
+                    try:
+                        msg_stream, _ = read_socket.recvfrom(4096)
+                        msgs = Message.parse(msg_stream.decode("utf-8"))
+                        for m in msgs:
+                            self.process_message(Message.from_json(json.loads(m)))
+                    except Exception as e:
+                        print("Exception:", e)
+                        read_socket.close()
+                        self.connection_list.remove(read_socket)
+
         self.server_socket.close()
 
     def process_message(self, msg):
-        print("Node_%i receive msg: %s"%(self.node.id,msg))
+        print(f"Node_{self.node.id} receive msg: {msg}")
 
         if msg.msg_type == Message_type.REQUEST:
-            if self.grants_sent:
-                hp_grant = sorted(self.grants_sent)[0]
+            self.queue.put((msg.ts, msg.src, msg))
 
-                if hp_grant < msg.src:
-                    self.node.client.send_message(
-                        Message(
-                            Message_type.FAILED,
-                            self.node.id,
-                            msg.src,
-                            self.node.lamport_ts
-                        ),
-                        msg.src
-                    )
-                    self.queue.put((msg.ts, msg.src, msg))
-
-                else:
-                    self.node.client.send_message(
-                        Message(
-                            Message_type.INQUIRE,
-                            self.node.id,
-                            hp_grant,
-                            self.node.lamport_ts
-                        ),
-                        hp_grant
-                    )
+            if self.grants_sent is None:
+                # No active grant → send immediately
+                ts, src, _ = self.queue.get()
+                self.send_grant(src, ts)
 
             else:
-                self.node.client.send_message(
-                    Message(
-                        Message_type.GRANT,
-                        self.node.id,
-                        msg.src,
-                        self.node.lamport_ts
-                    ),
-                    msg.src
-                )
-                self.grants_sent.add(msg.src)
-                    
+                # Compare priorities between current grant and new request
+                curr_ts, curr_src = self.grants_sent
+                if (msg.ts, msg.src) < (curr_ts, curr_src):
+                    # New request has higher priority → inquire current holder
+                    self.node.client.send_message(
+                        Message(Message_type.INQUIRE, self.node.id, curr_src, self.node.lamport_ts),
+                        curr_src
+                    )
+                else:
+                    # Lower priority → tell requester it failed for now
+                    self.node.client.send_message(
+                        Message(Message_type.FAILED, self.node.id, msg.src, self.node.lamport_ts),
+                        msg.src
+                    )
+
         elif msg.msg_type == Message_type.YIELD:
-            q_ts, q_src, q_msg = self.queue.get()
-            self.queue.put((q_ts, q_src, q_msg))
-            self.node.client.send_message(
-                Message(
-                    Message_type.GRANT,
-                    self.node.id,
-                    q_src,
-                    self.node.lamport_ts
-                ),
-                q_src
-            )
-            self.grants_sent.add(q_src)
-            self.queue.put((msg.ts, msg.src, msg))
-            if msg.src in self.grants_sent:
-                self.grants_sent.remove(msg.src)
+            # Current holder yielded → grant next in queue
+            if not self.queue.empty():
+                ts, src, _ = self.queue.get()
+                self.send_grant(src, ts)
+            self.yielded = True
 
         elif msg.msg_type == Message_type.RELEASE:
-            msgs = []
+            # Remove the releasing node from queue if it’s still there
+            new_q = PriorityQueue()
+            while not self.queue.empty():
+                ts, src, m = self.queue.get()
+                if src != msg.src:
+                    new_q.put((ts, src, m))
+            self.queue = new_q
 
-            # Delete the message source from the request queue
-            # q_src, q_msg = self.queue.get()
-            # while q_src != msg.src and not self.queue.empty():
-            #     msgs.append((q_src, q_msg))
-            #     q_src, q_msg = self.queue.get()
-            # if msg.src in self.grants_sent:
-            #     self.grants_sent.remove(msg.src)
-           
-            # # Put all other extracted messages back into the queue
-            # for m in msgs:
-            #     self.queue.put(m)
-
-            new_queue = PriorityQueue()
-            found = False
-            while  not self.queue.empty():
-                q_ts, q_src, q_msg = self.queue.get()
-                if q_src == msg.src:
-                    found = True
-                    continue
-                new_queue.put((q_ts, q_src, q_msg))
-            
-            self.queue = new_queue
-
-            # Sent a grant message to the request with the highest priority
+            # If there are waiting requests, grant to next
             if not self.queue.empty():
-                q_ts, q_src, q_msg = self.queue.get()
-                self.node.client.send_message(
-                    Message(
-                        Message_type.GRANT,
-                        self.node.id,
-                        q_src,
-                        self.node.lamport_ts
-                    ),
-                    q_src
-                )
-                self.grants_sent.add(q_src)
+                ts, src, _ = self.queue.get()
+                self.send_grant(src, ts)
+
+            # Clear grant if released node was current
+            if self.grants_sent and self.grants_sent[1] == msg.src:
+                self.grants_sent = None
 
         elif msg.msg_type == Message_type.INQUIRE:
             if self.failed or self.yielded:
                 self.node.client.send_message(
-                    Message(
-                        Message_type.YIELD,
-                        self.node.id,
-                        msg.src,
-                        self.node.lamport_ts
-                    ),
+                    Message(Message_type.YIELD, self.node.id, msg.src, self.node.lamport_ts),
                     msg.src
                 )
                 self.yielded = True
@@ -176,4 +119,10 @@ class NodeServer(Thread):
         else:
             raise ValueError(f"[ValueError]: Unknown message type: {msg.msg_type}")
 
- 
+    # Helper to send grant and update tracking
+    def send_grant(self, dst, ts):
+        self.node.client.send_message(
+            Message(Message_type.GRANT, self.node.id, dst, self.node.lamport_ts),
+            dst
+        )
+        self.grants_sent = (ts, dst)
