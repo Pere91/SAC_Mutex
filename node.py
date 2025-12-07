@@ -74,7 +74,7 @@ class Node(Thread):
 
         # List colleagues from the same row and the same column as the Node
         row_colleagues = [i for row in colleague_matrix for i in row if self.id in row]
-        col_colleagues = [i for row in colleague_matrix for i in row if (i % num_rows) == (self.id % num_rows) and i != self.id]
+        col_colleagues = [i for row in colleague_matrix for i in row if (i % num_rows) == (self.id % num_rows)] # [i for row in colleague_matrix for i in row if (i % num_rows) == (self.id % num_rows) and i != self.id]
 
         # Create quorum
         self.collegues = []
