@@ -99,6 +99,9 @@ class NodeServer(Thread):
         # Received a REQUEST
         if msg.msg_type == Message_type.REQUEST:
 
+            # Update Lamport timestamp
+            self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
+
             # Get the highest priority node that has received a GRANT from this
             if self.grants_sent:
                 hp_ts, hp_src = self.grants_sent
@@ -147,25 +150,32 @@ class NodeServer(Thread):
         elif msg.msg_type == Message_type.YIELD:
 
             # Get the info of the highest priority request in the queue
-            q_ts, q_src, q_msg = self.queue.get()
+            if not self.queue.empty():
+                q_ts, q_src, q_msg = self.queue.get()
 
-            # Send a GRANT to the highest priority request in the queue and put
-            # the yielding node in the queue.
-            self.node.client.send_message(
-                Message(
-                    Message_type.GRANT,
-                    self.node.id,
-                    q_src,
-                    self.node.lamport_ts
-                ),
-                q_src
-            )
-            self.queue.put((msg.ts, msg.src, msg))
+                # Update Lamport timestamp
+                self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
 
-            # Update the highest prioriry GRANT sent if needed
-            hp_ts, hp_src = self.grants_sent
-            if (q_ts, q_src) < (hp_ts, hp_src):
-                self.grants_sent = (q_ts, q_src)
+                # Send a GRANT to the highest priority request in the queue and put
+                # the yielding node in the queue.
+                self.node.client.send_message(
+                    Message(
+                        Message_type.GRANT,
+                        self.node.id,
+                        q_src,
+                        self.node.lamport_ts
+                    ),
+                    q_src
+                )
+                self.queue.put((msg.ts, msg.src, msg))
+
+                # Update the highest prioriry GRANT sent if needed
+                if self.grants_sent == None:
+                    self.grants_sent = (q_ts, q_src)
+                else:
+                    hp_ts, hp_src = self.grants_sent
+                    if (q_ts, q_src) < (hp_ts, hp_src):
+                        self.grants_sent = (q_ts, q_src)
 
         # Received a RELEASE
         elif msg.msg_type == Message_type.RELEASE:
@@ -181,6 +191,10 @@ class NodeServer(Thread):
 
             # Sent a GRANT to the request with the highest priority
             if not self.queue.empty():
+
+                # Update Lamport timestamp
+                self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
+
                 q_ts, q_src, q_msg = self.queue.get()
                 self.node.client.send_message(
                     Message(
@@ -192,16 +206,23 @@ class NodeServer(Thread):
                     q_src
                 )
 
-                # Update the highest prioriry GRANT sent if needed
-                hp_ts, hp_src = self.grants_sent
-                if (q_ts, q_src) < (hp_ts, hp_src):
+                # Update the highest priority GRANT sent if needed
+                if self.grants_sent == None:
                     self.grants_sent = (q_ts, q_src)
+                else:
+                    hp_ts, hp_src = self.grants_sent
+                    if (q_ts, q_src) < (hp_ts, hp_src):
+                        self.grants_sent = (q_ts, q_src)
 
         # Received INQUIRE
         elif msg.msg_type == Message_type.INQUIRE:
 
             # Reply with a YIELD if it has already failed or yielded
             if self.failed or self.yielded:
+
+                # Update Lamport timestamp
+                self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
+                
                 self.node.client.send_message(
                     Message(
                         Message_type.YIELD,

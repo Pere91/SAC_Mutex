@@ -1,3 +1,4 @@
+from queue import PriorityQueue
 from threading import Thread, Condition
 from math import ceil, sqrt
 import time
@@ -105,7 +106,7 @@ class Node(Thread):
             self.server.grants_received.clear()
 
             # Increase timestamp
-            self.lamport_ts += 1
+            # self.lamport_ts += 1
 
             # Send requests to all quorum peers
             self.client.multicast(
