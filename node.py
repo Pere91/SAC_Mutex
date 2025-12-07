@@ -6,6 +6,16 @@ from nodeServer import NodeServer
 from nodeSend import NodeSend
 from message import Message, Message_type
 import config
+import logger_config
+from datetime import datetime
+import random
+
+#LOG_FILE_PATH = f"logs/{datetime.now().strftime("%Y%m%d_%H%M%S")}.log"
+
+LOG_FILE_PATH = "logs/log.log"
+
+flog = logger_config.get_file_logger(LOG_FILE_PATH, logger_config.logging.DEBUG)
+clog = logger_config.get_console_logger(logger_config.logging.INFO)
 
 class Node(Thread):
     """
@@ -19,6 +29,7 @@ class Node(Thread):
         server (NodeServer): Server for handling the incoming messages.
         client (Nodesend): Client for handling message sending.
         collegues (list): Colleagues in the Node's quorum.
+        condition (Condition): Condition upon which entering the CS is allowed
     """
     _FINISHED_NODES = 0
     _HAVE_ALL_FINISHED = Condition()
@@ -38,7 +49,8 @@ class Node(Thread):
         self.__form_colleagues()
         self.server = NodeServer(self) 
         self.server.start()
-        self.client = NodeSend(self) 
+        self.client = NodeSend(self)
+        self.condition = Condition()
 
     def __form_colleagues(self):
         """
@@ -97,53 +109,59 @@ class Node(Thread):
         Run simulacrum scenario of multiple accesses to a critical section
         using Maekawa's algorithm for mutual exclusion.
         """
-        print("Run Node%i with the follows %s"%(self.id,self.collegues))
+        flog.info("Run Node%i with the follows %s"%(self.id,self.collegues))
+        clog.info("Run Node%i with the follows %s"%(self.id,self.collegues))
         self.client.start()
 
         self.wakeupcounter = 0
         while self.wakeupcounter <= 2: # Termination criteria
 
-            self.server.grants_received.clear()
-
-            # Increase timestamp
-            # self.lamport_ts += 1
+            time_offset = random.randint(10, 30)
+            time.sleep(time_offset / 10)
 
             # Send requests to all quorum peers
-            self.client.multicast(
-                Message(
+            req = Message(
                     msg_type=Message_type.REQUEST,
                     src=self.id,
                     ts=self.lamport_ts
-                ),
-                self.collegues
-            )
+                )
+
+            self.client.multicast(req, self.collegues)
+
+            flog.debug("Node_%i send msg: %s"%(self.id, req))
+            clog.debug("Node_%i send msg: %s"%(self.id, req))
 
             # Wait for unanimous grant
-            while len(self.server.grants_received) < len(self.collegues):
-                time.sleep(0.01)
+            with self.condition:
+                while len(self.server.grants_received) < len(self.collegues):
+                    self.condition.wait()
 
             # ENTER CRITICAL SECTION
-            print(f"[Node_{self.id}]: Greetings from the critical section!")
+            flog.info(f"[Node_{self.id}]: Greetings from the critical section!")
+            clog.info(f"[Node_{self.id}]: Greetings from the critical section!")
             # EXIT CRITICAL SECTION
 
             # Send release messages to all quorum peers
-            self.client.multicast(
-                Message(
+            rel = Message(
                     msg_type=Message_type.RELEASE,
                     src=self.id,
                     ts=self.lamport_ts
-                ),
-                self.collegues
-            )
+                )
+
+            self.client.multicast(rel, self.collegues)
+            flog.debug("Node_%i send msg: %s"%(self.id, req))
+            clog.debug("Node_%i send msg: %s"%(self.id, req))
 
             # Control iteration 
             self.wakeupcounter += 1 
                 
         # Wait for all nodes to finish
-        print("Node_%i is waiting for all nodes to finish"%self.id)
+        flog.info("Node_%i is waiting for all nodes to finish"%self.id)
+        clog.info("Node_%i is waiting for all nodes to finish"%self.id)
         self._finished()
 
-        print("Node_%i DONE!"%self.id)
+        flog.info("Node_%i DONE!"%self.id)
+        clog.info("Node_%i DONE!"%self.id)
 
     #TODO OPTIONAL you can change the way to stop
     def _finished(self): 

@@ -3,8 +3,16 @@ from threading import Thread
 import utils
 from message import Message, Message_type
 import json
-
+import logger_config
 from queue import PriorityQueue
+from datetime import datetime
+
+# LOG_FILE_PATH = f"logs/{datetime.now().strftime("%Y%m%d_%H%M%S")}.log" 
+
+LOG_FILE_PATH = "logs/log.log"
+
+flog = logger_config.get_file_logger(LOG_FILE_PATH, logger_config.logging.DEBUG)
+clog = logger_config.get_console_logger(logger_config.logging.INFO)
 
 class NodeServer(Thread):
     """
@@ -37,6 +45,18 @@ class NodeServer(Thread):
         self.grants_received = set()
         self.yielded = False
         self.failed = False
+
+    def __queue_tostr(self):
+        q = []
+        while not self.queue.empty():
+            q.append(self.queue.get())
+        
+        for n in q:
+            self.queue.put(n)
+        
+        return f"\t\tts_{self.node.lamport_ts}: Queue of Node_{self.node.id}: {q}"
+            
+        
     
     def run(self):
         """
@@ -94,7 +114,8 @@ class NodeServer(Thread):
         Raises:
             ValueError: If the type of the Message is not valid.
         """
-        print("Node_%i receive msg: %s"%(self.node.id,msg))
+        clog.info("Node_%i receive msg: %s"%(self.node.id,msg))
+        flog.info("Node_%i receive msg: %s"%(self.node.id,msg))
 
         # Received a REQUEST
         if msg.msg_type == Message_type.REQUEST:
@@ -109,65 +130,82 @@ class NodeServer(Thread):
                 # Reply with a FAILED if it has sent a GRANT to a higher
                 # priority node and put the request in the queue.
                 if (hp_ts, hp_src) < (msg.ts, msg.src):
-                    self.node.client.send_message(
-                        Message(
+                    rep = Message(
                             Message_type.FAILED,
                             self.node.id,
                             msg.src,
                             self.node.lamport_ts
-                        ),
-                        msg.src
-                    )
-                    self.queue.put((msg.ts, msg.src, msg))
+                        )
+
+                    self.node.client.send_message(rep, msg.src)
+                    self.queue.put((msg.ts, msg.src))
+
+                    flog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                    flog.debug(self.__queue_tostr())
+                    clog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                    clog.debug(self.__queue_tostr())
+                    
 
                 # Send an INQUIRE to the highest priority node which has given
                 # a GRANT to because the requesting one has more priority.
                 else:
-                    self.node.client.send_message(
-                        Message(
+                    rep = Message(
                             Message_type.INQUIRE,
                             self.node.id,
                             hp_src,
                             self.node.lamport_ts
-                        ),
-                        hp_src
-                    )
+                        )
+
+                    self.node.client.send_message(rep, hp_src)
+                    self.queue.put((msg.ts, msg.src))
+
+                    flog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                    flog.debug(self.__queue_tostr())
+                    clog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                    clog.debug(self.__queue_tostr())
 
             # Reply directly with a GRANT if no other GRANTs have been sent.
             else:
-                self.node.client.send_message(
-                    Message(
+                rep = Message(
                         Message_type.GRANT,
                         self.node.id,
                         msg.src,
                         self.node.lamport_ts
-                    ),
-                    msg.src
-                )
+                    )
+
+                self.node.client.send_message(rep, msg.src)
                 self.grants_sent = (msg.ts, msg.src)
+
+                flog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                flog.debug(self.__queue_tostr())
+                clog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                clog.debug(self.__queue_tostr())
 
         # Received a YIELD            
         elif msg.msg_type == Message_type.YIELD:
 
             # Get the info of the highest priority request in the queue
             if not self.queue.empty():
-                q_ts, q_src, q_msg = self.queue.get()
+                q_ts, q_src = self.queue.get()
 
                 # Update Lamport timestamp
                 self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
 
                 # Send a GRANT to the highest priority request in the queue and put
                 # the yielding node in the queue.
-                self.node.client.send_message(
-                    Message(
+                rep = Message(
                         Message_type.GRANT,
                         self.node.id,
                         q_src,
                         self.node.lamport_ts
-                    ),
-                    q_src
-                )
-                self.queue.put((msg.ts, msg.src, msg))
+                    )
+
+                self.node.client.send_message(rep, q_src)
+
+                flog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                flog.debug(self.__queue_tostr())
+                clog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                clog.debug(self.__queue_tostr())
 
                 # Update the highest prioriry GRANT sent if needed
                 if self.grants_sent == None:
@@ -177,16 +215,19 @@ class NodeServer(Thread):
                     if (q_ts, q_src) < (hp_ts, hp_src):
                         self.grants_sent = (q_ts, q_src)
 
+                flog.debug(f"\t\tHP_GRANT Node_{self.node.id}: {self.grants_sent}")
+                clog.debug(f"\t\tHP_GRANT Node_{self.node.id}: {self.grants_sent}")
+
         # Received a RELEASE
         elif msg.msg_type == Message_type.RELEASE:
 
             # Remove the releasing node from the queue
             new_queue = PriorityQueue()
             while  not self.queue.empty():
-                q_ts, q_src, q_msg = self.queue.get()
+                q_ts, q_src = self.queue.get()
                 if q_src == msg.src:
                     continue
-                new_queue.put((q_ts, q_src, q_msg))
+                new_queue.put((q_ts, q_src))
             self.queue = new_queue
 
             # Sent a GRANT to the request with the highest priority
@@ -195,16 +236,20 @@ class NodeServer(Thread):
                 # Update Lamport timestamp
                 self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
 
-                q_ts, q_src, q_msg = self.queue.get()
-                self.node.client.send_message(
-                    Message(
+                q_ts, q_src = self.queue.get()
+                rep = Message(
                         Message_type.GRANT,
                         self.node.id,
                         q_src,
                         self.node.lamport_ts
-                    ),
-                    q_src
-                )
+                    )
+
+                self.node.client.send_message(rep, q_src)
+
+                flog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                flog.debug(self.__queue_tostr())
+                clog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                clog.debug(self.__queue_tostr())
 
                 # Update the highest priority GRANT sent if needed
                 if self.grants_sent == None:
@@ -213,6 +258,12 @@ class NodeServer(Thread):
                     hp_ts, hp_src = self.grants_sent
                     if (q_ts, q_src) < (hp_ts, hp_src):
                         self.grants_sent = (q_ts, q_src)
+
+                flog.debug(f"\t\tHP_GRANT Node_{self.node.id}: {self.grants_sent}")
+                clog.debug(f"\t\tHP_GRANT Node_{self.node.id}: {self.grants_sent}")
+            
+            else:
+                self.grants_sent = None
 
         # Received INQUIRE
         elif msg.msg_type == Message_type.INQUIRE:
@@ -223,23 +274,29 @@ class NodeServer(Thread):
                 # Update Lamport timestamp
                 self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
                 
-                self.node.client.send_message(
-                    Message(
+                rep = Message(
                         Message_type.YIELD,
                         self.node.id,
                         msg.src,
                         self.node.lamport_ts
-                    ),
-                    msg.src
-                )
+                    )
+
+                self.node.client.send_message(rep, msg.src)
                 self.yielded = True
-                self.grants_received.clear()
+
+                flog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                flog.debug(self.__queue_tostr())
+                clog.debug("Node_%i send msg: %s"%(self.node.id, rep))
+                clog.debug(self.__queue_tostr())
 
         # Received a GRANT
         elif msg.msg_type == Message_type.GRANT:
             self.grants_received.add(msg.src)
             self.yielded = False
             self.failed = False
+
+            with self.node.condition:
+                self.node.condition.notify_all()
 
         # Received a FAILED
         elif msg.msg_type == Message_type.FAILED:
@@ -249,5 +306,3 @@ class NodeServer(Thread):
         # Received a message with a non valid type
         else:
             raise ValueError(f"[ValueError]: Unknown message type: {msg.msg_type}")
-
- 
