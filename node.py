@@ -118,7 +118,7 @@ class Node(Thread):
 
         # List colleagues from the same row and the same column as the Node
         row_colleagues = [i for row in colleague_matrix for i in row if self.id in row]
-        col_colleagues = [i for row in colleague_matrix for i in row if (i % num_rows) == (self.id % num_rows)] # [i for row in colleague_matrix for i in row if (i % num_rows) == (self.id % num_rows) and i != self.id]
+        col_colleagues = [i for row in colleague_matrix for i in row if (i % num_rows) == (self.id % num_rows)]
 
         # Create quorum
         self.collegues = []
@@ -130,6 +130,18 @@ class Node(Thread):
 
 
     def request_handler(self, msg):
+        """
+        Handler for REQUEST type messages. Cases:
+            
+            - This node hasn't sent any GRANT yet -> send GRANT
+            - This node has sent a GRANT to some higher priority node -> 
+                enqueue requester and send INQUIRE to the higher priority node
+            - This node has sent a GRANT to non-higher priority nodes ->
+                send FAILED to requester and enqueue it
+
+        Args:
+            msg (Message): the Message containing the REQUEST
+        """
 
         # Get the highest priority node that has received a GRANT from this
         if self.grants_sent:
@@ -191,7 +203,15 @@ class Node(Thread):
             clog.debug(self.__queue_tostr())       
 
 
+
     def yield_handler(self, msg):
+        """
+        Handler for YIELD type messages. Puts the yielding node in the queue
+        and removes the grant previously sent to it.
+
+        Args:
+            msg (Message): Message containing the YIELD
+        """
 
         # Put the yielding node in the queue
         self.queue.put((msg.ts, msg.src))
@@ -228,6 +248,15 @@ class Node(Thread):
 
 
     def release_handler(self, msg):
+        """
+        Handler for RELEASE type messages. Removes the releasing node from both
+        the queue and the list of grants sent, and then sents a GRANT to the
+        request at the head of the queue.
+
+        Args:
+            msg (Message): message containing the RELEASE
+        """
+
         # Remove the releasing node from the queue and grants_sent
         if self.grants_sent and (msg.ts, msg.src) == self.grants_sent:
             self.grants_sent = None
@@ -269,6 +298,13 @@ class Node(Thread):
                          
 
     def inquire_handler(self, msg):
+        """
+        Handler for INQUIRE type messages. If the node hasn't yet gotten into
+        the critical section, replies with a YIELD message.
+
+        Args:
+            msg (Message): message containing the INQUIRE
+        """
         rep = None
 
         # If it hasn't got the CS, yield
@@ -296,8 +332,15 @@ class Node(Thread):
              clog.debug(self.__queue_tostr())
 
 
-
     def grant_handler(self, msg):
+        """
+        Handler for GRANT type messages. Adds the GRANT to its own list and
+        clears failed and yielded conditions. Notifies if it has gotten all
+        the grants from peers.
+
+        Args:
+            msg (Message): message containing the GRANT
+        """
         with self.condition:
             self.grants_received.add(msg.src)
             self.yielded = False
@@ -308,9 +351,16 @@ class Node(Thread):
 
 
     def failed_handler(self, msg):
-        self.failed = True
-        self.yielded = True
-        self.grants_received.clear()        
+        """
+        Handler for FAILED type messages. Sets the failed and yielded
+        conditions.
+
+        Args:
+            msg (Message): message containing the FAILED
+        """
+        with self.condition:
+            self.failed = True
+            self.yielded = True    
             
 
 
@@ -337,7 +387,9 @@ class Node(Thread):
         while self.wakeupcounter <= 2: # Termination criteria
 
             # Make nodes start at different times
-            time_offset = random.randint(20, 80)
+            min_time = 20
+            max_time = ceil(config.numNodes * 7.5) + min_time
+            time_offset = random.randint(min_time, max_time)
             time.sleep(time_offset / 10)
 
             # Send requests to all quorum peers
@@ -392,8 +444,12 @@ class Node(Thread):
         flog.info("Node_%i DONE!"%self.id)
         clog.info("Node_%i DONE!"%self.id)
 
-    #TODO OPTIONAL you can change the way to stop
+
     def _finished(self): 
+        """
+        Condition upon which nodes finish. All nodes must have completed all
+        rounds in the critical section.
+        """
         with Node._HAVE_ALL_FINISHED:
             Node._FINISHED_NODES += 1
             if Node._FINISHED_NODES == config.numNodes:

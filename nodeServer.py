@@ -5,8 +5,6 @@ from message import Message, Message_type
 import json
 import logger_config
 
-# LOG_FILE_PATH = f"logs/{datetime.now().strftime("%Y%m%d_%H%M%S")}.log" 
-
 LOG_FILE_PATH = "logs/log.log"
 
 flog = logger_config.get_file_logger(LOG_FILE_PATH, logger_config.logging.DEBUG)
