@@ -24,5 +24,5 @@ def create_client_socket():
         socket.socket: socket on the client side.
     """
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    s.settimeout(4000) #non-blocking mode
+    s.settimeout(1000) #non-blocking mode
     return s

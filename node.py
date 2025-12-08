@@ -30,7 +30,11 @@ class Node(Thread):
         client (Nodesend): Client for handling message sending.
         collegues (list): Colleagues in the Node's quorum.
         condition (Condition): Condition upon which entering the CS is allowed
-        #TODO add more attributes
+        queue (PriorityQueue): Stores other nodes' requests based on priority.
+        grants_sent (tuple): Highest priority node to which a GRANT is sent.
+        grants_received (set): IDs of the nodes that have conceded a GRANT.
+        yielded (bool): True if the node has already yielded; False otherwise.
+        failed (bool): True if the node has received a FAILED; False otherwise.
     """
     _FINISHED_NODES = 0
     _HAVE_ALL_FINISHED = Condition()
@@ -52,7 +56,6 @@ class Node(Thread):
         self.server.start()
         self.client = NodeSend(self)
         self.condition = Condition()
-
         self.queue = PriorityQueue()
         self.grants_sent = None
         self.grants_received = set()
@@ -60,8 +63,14 @@ class Node(Thread):
         self.failed = False
 
 
-    #TODO DOCS
     def __queue_tostr(self):
+        """
+        Converts the contents of a PriorityQueue to a formatted string,
+        preserving the order.
+
+        Returns:
+            string: formatted string representation of the queue contents
+        """
         q = []
         while not self.queue.empty():
             q.append(self.queue.get())
@@ -70,6 +79,7 @@ class Node(Thread):
             self.queue.put(n)
         
         return f"\t\tts_{self.lamport_ts}: Queue of Node_{self.id}: {q}"
+    
 
     def __form_colleagues(self):
         """
@@ -308,22 +318,28 @@ class Node(Thread):
         """
         flog.info("Run Node%i with the follows %s"%(self.id,self.collegues))
         clog.info("Run Node%i with the follows %s"%(self.id,self.collegues))
+
+        # Members of the quorum that are not this node
+        multicast_group = [n for n in self.collegues if n != self.id]
+
         self.client.start()
 
         self.wakeupcounter = 0
         while self.wakeupcounter <= 2: # Termination criteria
 
-            time_offset = random.randint(10, 30)
+            time_offset = random.randint(20, 80)
             time.sleep(time_offset / 10)
 
             # Send requests to all quorum peers
+            self.grants_received.add(self.id)
+
             req = Message(
                     msg_type=Message_type.REQUEST,
                     src=self.id,
                     ts=self.lamport_ts
                 )
 
-            self.client.multicast(req, self.collegues)
+            self.client.multicast(req, multicast_group)
 
             flog.debug("Node_%i send msg: %s"%(self.id, req))
             clog.debug("Node_%i send msg: %s"%(self.id, req))
@@ -345,7 +361,7 @@ class Node(Thread):
                     ts=self.lamport_ts
                 )
 
-            self.client.multicast(rel, self.collegues)
+            self.client.multicast(rel, multicast_group)
             flog.debug("Node_%i send msg: %s"%(self.id, req))
             clog.debug("Node_%i send msg: %s"%(self.id, req))
 

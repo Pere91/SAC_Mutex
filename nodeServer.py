@@ -4,8 +4,6 @@ import utils
 from message import Message, Message_type
 import json
 import logger_config
-from queue import PriorityQueue
-from datetime import datetime
 
 # LOG_FILE_PATH = f"logs/{datetime.now().strftime("%Y%m%d_%H%M%S")}.log" 
 
@@ -18,15 +16,9 @@ class NodeServer(Thread):
     """
     Handles a node's receiving message operations and the responses to them.
 
-    # TODO: UPDATE WITH REORGANIZED CODE
     Attributes:
         node (Node): Node that receives the messages as a server.
         daemon (bool): Thread's daemon option.
-        queue (PriorityQueue): Stores other nodes' requests based on priority.
-        grants_sent (tuple): Highest priority node to which a GRANT is sent.
-        grants_received (set): IDs of the nodes that have conceded a GRANT.
-        yielded (bool): True if the node has already yielded; False otherwise.
-        failed (bool): True if the node has received a FAILED; False otherwise.
         connection_list(list): Stores all connections to this node as server.
         server_socket(socket.socket): Socket as server.
     """
@@ -59,7 +51,7 @@ class NodeServer(Thread):
 
         while self.node.daemon:
             (read_sockets, write_sockets, error_sockets) = select.select(
-                self.connection_list, [], [], 5)
+                self.connection_list, [], [], 20)
             if not (read_sockets or write_sockets or error_sockets):
                 print('NS%i - Timed out'%self.node.id) #force to assert the while condition 
             else:
@@ -88,8 +80,8 @@ class NodeServer(Thread):
 
     def process_message(self, msg):
         """
-        Determines which type of message is received and acts according each
-        case.
+        Determines which type of message is received and calls the
+        corresponding handler.
 
         Args:
             msg (Message): Message received.
