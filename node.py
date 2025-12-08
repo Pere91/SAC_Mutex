@@ -35,6 +35,8 @@ class Node(Thread):
         grants_received (set): IDs of the nodes that have conceded a GRANT.
         yielded (bool): True if the node has already yielded; False otherwise.
         failed (bool): True if the node has received a FAILED; False otherwise.
+        in_CS (bool): True if the node is in the critical section; False otherwise.
+        inquired (set): IDs of the nodes that have sent an inquire and are waiting.
     """
     _FINISHED_NODES = 0
     _HAVE_ALL_FINISHED = Condition()
@@ -61,6 +63,8 @@ class Node(Thread):
         self.grants_received = set()
         self.yielded = False
         self.failed = False
+        self.in_CS = False
+        self.inquired = set()
 
 
     def __queue_tostr(self):
@@ -128,8 +132,6 @@ class Node(Thread):
 
 
     def request_handler(self, msg):
-        # Update Lamport timestamp
-        self.lamport_ts = max(self.lamport_ts, msg.ts) + 1
 
         # Get the highest priority node that has received a GRANT from this
         if self.grants_sent:
@@ -161,7 +163,8 @@ class Node(Thread):
                         Message_type.INQUIRE,
                         self.id,
                         hp_src,
-                        self.lamport_ts
+                        self.lamport_ts,
+                        (msg.ts, msg.src)
                     )
 
                 self.client.send_message(rep, hp_src)
@@ -187,15 +190,17 @@ class Node(Thread):
             flog.debug("Node_%i send msg: %s"%(self.id, rep))
             flog.debug(self.__queue_tostr())
             clog.debug("Node_%i send msg: %s"%(self.id, rep))
-            clog.debug(self.__queue_tostr())        
+            clog.debug(self.__queue_tostr())       
+
 
     def yield_handler(self, msg):
+
+        # Put the yielding node in the queue
+        self.queue.put((msg.ts, msg.src))
+        
         # Get the info of the highest priority request in the queue
         if not self.queue.empty():
             q_ts, q_src = self.queue.get()
-
-            # Update Lamport timestamp
-            self.lamport_ts = max(self.lamport_ts, msg.ts) + 1
 
             # Send a GRANT to the highest priority request in the queue and put
             # the yielding node in the queue.
@@ -222,10 +227,14 @@ class Node(Thread):
                     self.grants_sent = (q_ts, q_src)
 
             flog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")
-            clog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")   
+            clog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")
+
 
     def release_handler(self, msg):
-        # Remove the releasing node from the queue
+        # Remove the releasing node from the queue and grants_sent
+        if self.grants_sent and (msg.ts, msg.src) == self.grants_sent:
+            self.grants_sent = None
+
         new_queue = PriorityQueue()
         while  not self.queue.empty():
             q_ts, q_src = self.queue.get()
@@ -236,9 +245,6 @@ class Node(Thread):
 
         # Sent a GRANT to the request with the highest priority
         if not self.queue.empty():
-
-            # Update Lamport timestamp
-            self.lamport_ts = max(self.lamport_ts, msg.ts) + 1
 
             q_ts, q_src = self.queue.get()
             rep = Message(
@@ -267,14 +273,25 @@ class Node(Thread):
             clog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")
         
         else:
-            self.grants_sent = None             
+            self.grants_sent = None
+                         
 
     def inquire_handler(self, msg):
-        # Reply with a YIELD if it has already failed or yielded
-        if self.failed or self.yielded:
 
-            # Update Lamport timestamp
-            self.lamport_ts = max(self.lamport_ts, msg.ts) + 1
+        # Ignore if this node is in the critical section
+        if self.in_CS:
+            return
+    
+        # Check if this node has granted some higher priority node
+        if self.grants_sent:
+            req_ts, req_src = msg.data
+            will_lose = (req_ts, req_src) < self.grants_sent
+        else:
+            will_lose = False
+
+        # Reply with a YIELD if it has already failed or yielded or it knows
+        # that it will lose
+        if self.failed or self.yielded or will_lose:
             
             rep = Message(
                     Message_type.YIELD,
@@ -291,16 +308,39 @@ class Node(Thread):
             clog.debug("Node_%i send msg: %s"%(self.id, rep))
             clog.debug(self.__queue_tostr())   
 
+        else:
+            self.inquired.add((msg.ts, msg.src))
+
+
     def grant_handler(self, msg):
-        self.grants_received.add(msg.src)
-        self.yielded = False
-        self.failed = False
-
         with self.condition:
-            self.condition.notify_all()
+            self.grants_received.add(msg.src)
+            self.yielded = False
+            self.failed = False
+            if not len(self.grants_received) < len(self.collegues):
+                self.condition.notify()
 
-    def failed_handler(self):
+
+    def failed_handler(self, msg):
         self.failed = True
+        self.yielded = True
+
+        for _, i_src in self.inquired:
+            rep = Message(
+                    Message_type.YIELD,
+                    self.id,
+                    i_src,
+                    self.lamport_ts
+                )
+
+            self.client.send_message(rep, i_src)
+
+            flog.debug("Node_%i send msg: %s"%(self.id, rep))
+            flog.debug(self.__queue_tostr())
+            clog.debug("Node_%i send msg: %s"%(self.id, rep))
+            clog.debug(self.__queue_tostr())
+
+        self.inquired.clear()
         self.grants_received.clear()        
             
 
@@ -327,6 +367,7 @@ class Node(Thread):
         self.wakeupcounter = 0
         while self.wakeupcounter <= 2: # Termination criteria
 
+            # Make nodes start at different times
             time_offset = random.randint(20, 80)
             time.sleep(time_offset / 10)
 
@@ -348,11 +389,14 @@ class Node(Thread):
             with self.condition:
                 while len(self.grants_received) < len(self.collegues):
                     self.condition.wait()
-
-            # ENTER CRITICAL SECTION
-            flog.info(f"[Node_{self.id}]: Greetings from the critical section!")
-            clog.info(f"[Node_{self.id}]: Greetings from the critical section!")
-            # EXIT CRITICAL SECTION
+            
+                # ENTER CRITICAL SECTION
+                self.in_CS = True
+                flog.info(f"[Node_{self.id}]: Greetings from the critical section!")
+                clog.info(f"[Node_{self.id}]: Greetings from the critical section!")
+                self.grants_received.clear()
+                self.in_CS = False
+                # EXIT CRITICAL SECTION
 
             # Send release messages to all quorum peers
             rel = Message(
@@ -360,7 +404,7 @@ class Node(Thread):
                     src=self.id,
                     ts=self.lamport_ts
                 )
-
+            
             self.client.multicast(rel, multicast_group)
             flog.debug("Node_%i send msg: %s"%(self.id, req))
             clog.debug("Node_%i send msg: %s"%(self.id, req))

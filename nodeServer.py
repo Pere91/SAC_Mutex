@@ -92,6 +92,9 @@ class NodeServer(Thread):
         clog.info("Node_%i receive msg: %s"%(self.node.id,msg))
         flog.info("Node_%i receive msg: %s"%(self.node.id,msg))
 
+        # Update Lamport timestamp
+        self.node.lamport_ts = max(self.node.lamport_ts, msg.ts) + 1
+
         # Received a REQUEST
         if msg.msg_type == Message_type.REQUEST:
             self.node.request_handler(msg)
@@ -114,7 +117,7 @@ class NodeServer(Thread):
 
         # Received a FAILED
         elif msg.msg_type == Message_type.FAILED:
-            self.node.failed_handler()
+            self.node.failed_handler(msg)
 
         # Received a message with a non valid type
         else:
