@@ -36,7 +36,6 @@ class Node(Thread):
         yielded (bool): True if the node has already yielded; False otherwise.
         failed (bool): True if the node has received a FAILED; False otherwise.
         in_CS (bool): True if the node is in the critical section; False otherwise.
-        inquired (set): IDs of the nodes that have sent an inquire and are waiting.
     """
     _FINISHED_NODES = 0
     _HAVE_ALL_FINISHED = Condition()
@@ -64,7 +63,6 @@ class Node(Thread):
         self.yielded = False
         self.failed = False
         self.in_CS = False
-        self.inquired = set()
 
 
     def __queue_tostr(self):
@@ -197,6 +195,10 @@ class Node(Thread):
 
         # Put the yielding node in the queue
         self.queue.put((msg.ts, msg.src))
+
+        # Clear the grant sent to the yielding node
+        if self.grants_sent and (msg.ts, msg.src) == self.grants_sent:
+            self.grants_sent = None
         
         # Get the info of the highest priority request in the queue
         if not self.queue.empty():
@@ -218,13 +220,8 @@ class Node(Thread):
             clog.debug("Node_%i send msg: %s"%(self.id, rep))
             clog.debug(self.__queue_tostr())
 
-            # Update the highest prioriry GRANT sent if needed
-            if self.grants_sent == None:
-                self.grants_sent = (q_ts, q_src)
-            else:
-                hp_ts, hp_src = self.grants_sent
-                if (q_ts, q_src) < (hp_ts, hp_src):
-                    self.grants_sent = (q_ts, q_src)
+            # Update the highest prioriry GRANT sent
+            self.grants_sent = (q_ts, q_src)
 
             flog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")
             clog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")
@@ -261,13 +258,8 @@ class Node(Thread):
             clog.debug("Node_%i send msg: %s"%(self.id, rep))
             clog.debug(self.__queue_tostr())
 
-            # Update the highest priority GRANT sent if needed
-            if self.grants_sent == None:
-                self.grants_sent = (q_ts, q_src)
-            else:
-                hp_ts, hp_src = self.grants_sent
-                if (q_ts, q_src) < (hp_ts, hp_src):
-                    self.grants_sent = (q_ts, q_src)
+            # Update the highest priority GRANT sent
+            self.grants_sent = (q_ts, q_src)
 
             flog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")
             clog.debug(f"\t\tHP_GRANT Node_{self.id}: {self.grants_sent}")
@@ -277,39 +269,32 @@ class Node(Thread):
                          
 
     def inquire_handler(self, msg):
+        rep = None
 
-        # Ignore if this node is in the critical section
-        if self.in_CS:
-            return
-    
-        # Check if this node has granted some higher priority node
-        if self.grants_sent:
-            req_ts, req_src = msg.data
-            will_lose = (req_ts, req_src) < self.grants_sent
-        else:
-            will_lose = False
+        # If it hasn't got the CS, yield
+        with self.condition:
+            if not self.in_CS:  
+                rep = Message(
+                        Message_type.YIELD,
+                        self.id,
+                        msg.src,
+                        self.lamport_ts
+                    )
+               
+                self.yielded = True
 
-        # Reply with a YIELD if it has already failed or yielded or it knows
-        # that it will lose
-        if self.failed or self.yielded or will_lose:
-            
-            rep = Message(
-                    Message_type.YIELD,
-                    self.id,
-                    msg.src,
-                    self.lamport_ts
-                )
+                # Clear the yielding node from the grants received
+                if msg.src in self.grants_received:
+                    self.grants_received.remove(msg.src)
 
-            self.client.send_message(rep, msg.src)
-            self.yielded = True
+        # Send yield message if created
+        if rep:
+             self.client.send_message(rep, msg.src)
+             flog.debug("Node_%i send msg: %s"%(self.id, rep))
+             flog.debug(self.__queue_tostr())
+             clog.debug("Node_%i send msg: %s"%(self.id, rep))
+             clog.debug(self.__queue_tostr())
 
-            flog.debug("Node_%i send msg: %s"%(self.id, rep))
-            flog.debug(self.__queue_tostr())
-            clog.debug("Node_%i send msg: %s"%(self.id, rep))
-            clog.debug(self.__queue_tostr())   
-
-        else:
-            self.inquired.add((msg.ts, msg.src))
 
 
     def grant_handler(self, msg):
@@ -317,6 +302,7 @@ class Node(Thread):
             self.grants_received.add(msg.src)
             self.yielded = False
             self.failed = False
+
             if not len(self.grants_received) < len(self.collegues):
                 self.condition.notify()
 
@@ -324,23 +310,6 @@ class Node(Thread):
     def failed_handler(self, msg):
         self.failed = True
         self.yielded = True
-
-        for _, i_src in self.inquired:
-            rep = Message(
-                    Message_type.YIELD,
-                    self.id,
-                    i_src,
-                    self.lamport_ts
-                )
-
-            self.client.send_message(rep, i_src)
-
-            flog.debug("Node_%i send msg: %s"%(self.id, rep))
-            flog.debug(self.__queue_tostr())
-            clog.debug("Node_%i send msg: %s"%(self.id, rep))
-            clog.debug(self.__queue_tostr())
-
-        self.inquired.clear()
         self.grants_received.clear()        
             
 
@@ -389,14 +358,17 @@ class Node(Thread):
             with self.condition:
                 while len(self.grants_received) < len(self.collegues):
                     self.condition.wait()
-            
-                # ENTER CRITICAL SECTION
+                
                 self.in_CS = True
-                flog.info(f"[Node_{self.id}]: Greetings from the critical section!")
-                clog.info(f"[Node_{self.id}]: Greetings from the critical section!")
+            
+            # ENTER CRITICAL SECTION
+            flog.info(f"[Node_{self.id}]: Greetings from the critical section!")
+            clog.info(f"[Node_{self.id}]: Greetings from the critical section!")
+            # EXIT CRITICAL SECTION
+
+            with self.condition:
                 self.grants_received.clear()
                 self.in_CS = False
-                # EXIT CRITICAL SECTION
 
             # Send release messages to all quorum peers
             rel = Message(
