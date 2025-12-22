@@ -75,6 +75,7 @@ class NodeServer(Thread):
                             continue
         
         self.server_socket.close()
+        
 
     def process_message(self, msg):
         """
